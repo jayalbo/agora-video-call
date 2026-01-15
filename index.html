@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agora 1v1 Video Call</title>
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --primary: #3b82f6;
+            --danger: #ef4444;
+            --text: #f8fafc;
+        }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .header {
+            padding: 1rem 2rem;
+            background: var(--card);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+        .setup-panel {
+            padding: 1rem;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+        input {
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            outline: none;
+        }
+        .video-container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            padding: 1rem;
+            position: relative;
+        }
+        .video-player {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        .label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 10;
+        }
+        .controls {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 1rem;
+            background: rgba(30, 41, 59, 0.8);
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            backdrop-filter: blur(8px);
+        }
+        .btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.2rem;
+            transition: all 0.2s;
+        }
+        .btn-join { background: var(--primary); color: white; width: auto; padding: 0 20px; border-radius: 6px; height: 38px; }
+        .btn-leave { background: var(--danger); color: white; }
+        .btn-toggle { background: #475569; color: white; }
+        .btn-toggle.off { background: var(--danger); }
+        .hidden { display: none; }
+        
+        @media (max-width: 768px) {
+            .video-container { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2 style="margin:0; font-size: 1.2rem;">Agora 1v1</h2>
+    <div id="status" style="font-size: 0.8rem; color: #94a3b8;">Disconnected</div>
+</div>
+
+<div class="setup-panel" id="setup">
+    <input type="text" id="appid" placeholder="Agora App ID">
+    <input type="text" id="channel" placeholder="Channel Name" value="test">
+    <input type="text" id="token" placeholder="Token (Optional)">
+    <button class="btn btn-join" onclick="join()">Join Call</button>
+</div>
+
+<div class="video-container">
+    <div id="local-player" class="video-player">
+        <div class="label">You (Local)</div>
+    </div>
+    <div id="remote-player" class="video-player">
+        <div class="label">Peer (Remote)</div>
+        <div id="waiting-msg" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:#475569;">
+            Waiting for peer...
+        </div>
+    </div>
+</div>
+
+<div class="controls hidden" id="controls">
+    <button class="btn btn-toggle" id="mute-audio" onclick="toggleAudio()"><i class="fas fa-microphone"></i></button>
+    <button class="btn btn-toggle" id="mute-video" onclick="toggleVideo()"><i class="fas fa-video"></i></button>
+    <button class="btn btn-leave" onclick="leave()"><i class="fas fa-phone-slash"></i></button>
+</div>
+
+<script>
+    let client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    let localTracks = { videoTrack: null, audioTrack: null };
+    let remoteUsers = {};
+    let options = { appid: null, channel: null, uid: null, token: null };
+
+    async function join() {
+        options.appid = document.getElementById("appid").value;
+        options.channel = document.getElementById("channel").value;
+        options.token = document.getElementById("token").value || null;
+
+        if (!options.appid || !options.channel) {
+            alert("Please enter App ID and Channel Name");
+            return;
+        }
+
+        client.on("user-published", handleUserPublished);
+        client.on("user-unpublished", handleUserUnpublished);
+
+        try {
+            options.uid = await client.join(options.appid, options.channel, options.token, null);
+            
+            localTracks.audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+            localTracks.videoTrack = await AgoraRTC.createCameraVideoTrack();
+            
+            localTracks.videoTrack.play("local-player");
+            await client.publish(Object.values(localTracks));
+
+            document.getElementById("setup").classList.add("hidden");
+            document.getElementById("controls").classList.remove("hidden");
+            document.getElementById("status").innerText = "Connected as " + options.uid;
+            document.getElementById("status").style.color = "#22c55e";
+        } catch (error) {
+            console.error(error);
+            alert("Join failed: " + error.message);
+        }
+    }
+
+    async function leave() {
+        for (trackName in localTracks) {
+            var track = localTracks[trackName];
+            if (track) {
+                track.stop();
+                track.close();
+                localTracks[trackName] = null;
+            }
+        }
+
+        remoteUsers = {};
+        await client.leave();
+
+        document.getElementById("setup").classList.remove("hidden");
+        document.getElementById("controls").classList.add("hidden");
+        document.getElementById("status").innerText = "Disconnected";
+        document.getElementById("status").style.color = "#94a3b8";
+        document.getElementById("remote-player").innerHTML = '<div class="label">Peer (Remote)</div><div id="waiting-msg" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:#475569;">Waiting for peer...</div>';
+    }
+
+    async function handleUserPublished(user, mediaType) {
+        const id = user.uid;
+        remoteUsers[id] = user;
+        await client.subscribe(user, mediaType);
+
+        if (mediaType === "video") {
+            document.getElementById("waiting-msg").classList.add("hidden");
+            const remotePlayerContainer = document.getElementById("remote-player");
+            user.videoTrack.play(remotePlayerContainer);
+        }
+        if (mediaType === "audio") {
+            user.audioTrack.play();
+        }
+    }
+
+    function handleUserUnpublished(user) {
+        const id = user.uid;
+        delete remoteUsers[id];
+        document.getElementById("waiting-msg").classList.remove("hidden");
+    }
+
+    async function toggleAudio() {
+        if (!localTracks.audioTrack) return;
+        const btn = document.getElementById("mute-audio");
+        if (localTracks.audioTrack.muted) {
+            await localTracks.audioTrack.setMuted(false);
+            btn.innerHTML = '<i class="fas fa-microphone"></i>';
+            btn.classList.remove("off");
+        } else {
+            await localTracks.audioTrack.setMuted(true);
+            btn.innerHTML = '<i class="fas fa-microphone-slash"></i>';
+            btn.classList.add("off");
+        }
+    }
+
+    async function toggleVideo() {
+        if (!localTracks.videoTrack) return;
+        const btn = document.getElementById("mute-video");
+        if (localTracks.videoTrack.muted) {
+            await localTracks.videoTrack.setMuted(false);
+            btn.innerHTML = '<i class="fas fa-video"></i>';
+            btn.classList.remove("off");
+        } else {
+            await localTracks.videoTrack.setMuted(true);
+            btn.innerHTML = '<i class="fas fa-video-slash"></i>';
+            btn.classList.add("off");
+        }
+    }
+</script>
+</body>
+</html>
